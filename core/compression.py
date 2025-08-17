@@ -149,12 +149,30 @@ class AdaptiveVideoCompressor:
         
         start_time = time.time()
         try:
-            (
+            # Add progress monitoring for long encodes
+            print("Starting encoding... (this may take several minutes for H.265)")
+            
+            # Set timeout based on video duration and codec
+            is_h265 = 'h265' in encode_options['vcodec'] or 'hevc' in encode_options['vcodec']
+            timeout_multiplier = 10 if is_h265 else 3  # H.265 takes much longer
+            max_timeout = int(total_duration * timeout_multiplier + 300)  # Base + 5min buffer
+            
+            process = (
                 input_stream
                 .output(output_path, **encode_options)
                 .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True, quiet=True)
+                .run_async(pipe_stdout=True, pipe_stderr=True)
             )
+            
+            try:
+                stdout, stderr = process.communicate(timeout=max_timeout)
+                
+                if process.returncode != 0:
+                    raise ffmpeg.Error('ffmpeg', stdout, stderr)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                print(f"ERROR: Encoding timed out after {max_timeout} seconds")
+                raise ffmpeg.Error('ffmpeg', b'', b'Encoding timeout')
             compression_time = time.time() - start_time
             return {
                 'success': True,
@@ -166,7 +184,7 @@ class AdaptiveVideoCompressor:
                 'target_fps': target_fps,
                 'codec_used': self.codec
             }
-        except ffmpeg.Error as e:
+        except (ffmpeg.Error, subprocess.TimeoutExpired) as e:
             err = e.stderr.decode() if e.stderr else str(e)
             print(f"ERROR: FFmpeg error: {err}")
             

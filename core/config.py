@@ -33,7 +33,7 @@ COMPRESSION_PROFILES = {
         'inactive_fps': 5,
         'description': 'Maximum compression with acceptable quality',
         'expected_compression': '75-85%',
-        'preferred_codec': 'h265',
+        'preferred_codec': 'h264',
         'preset': 'slow'
     }
 }
