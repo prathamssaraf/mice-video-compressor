@@ -17,7 +17,8 @@ from utils.video_utils import (
 from utils.reporting import generate_full_report, print_summary_stats
 
 
-def process_single_video(video_path, profile='balanced', show_analysis=True, gpu_available=False):
+def process_single_video(video_path, profile='balanced', show_analysis=True, gpu_available=False, 
+                        codec=None, prefer_hardware=True):
     """
     Process a single video with adaptive compression.
     
@@ -26,6 +27,8 @@ def process_single_video(video_path, profile='balanced', show_analysis=True, gpu
         profile (str): Compression profile (conservative/balanced/aggressive)
         show_analysis (bool): Whether to generate motion analysis plots
         gpu_available (bool): Whether GPU acceleration is available
+        codec (str): Codec to use ('h264' or 'h265'), None for profile default
+        prefer_hardware (bool): Whether to prefer hardware acceleration
     
     Returns:
         dict or None: Compression report or None if failed
@@ -33,12 +36,19 @@ def process_single_video(video_path, profile='balanced', show_analysis=True, gpu
     if not validate_video_path(video_path):
         return None
 
-    output_path = get_output_path(video_path, profile)
+    # Determine codec for output filename
+    actual_codec = codec if codec else COMPRESSION_PROFILES[profile].get('preferred_codec', 'h264')
+    output_path = get_output_path(video_path, profile, codec=actual_codec)
     
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    compressor = AdaptiveVideoCompressor(profile=profile, gpu_available=gpu_available)
+    compressor = AdaptiveVideoCompressor(
+        profile=profile, 
+        gpu_available=gpu_available,
+        codec=codec,
+        prefer_hardware=prefer_hardware
+    )
     report = compressor.analyze_and_compress(video_path, output_path)
 
     print_compression_summary(report)
@@ -51,7 +61,8 @@ def process_single_video(video_path, profile='balanced', show_analysis=True, gpu
     return report
 
 
-def process_all_videos(profile='balanced', show_analysis=True, gpu_available=False, input_dir=None):
+def process_all_videos(profile='balanced', show_analysis=True, gpu_available=False, input_dir=None,
+                      codec=None, prefer_hardware=True):
     """
     Process all videos in the input directory.
     
@@ -60,6 +71,8 @@ def process_all_videos(profile='balanced', show_analysis=True, gpu_available=Fal
         show_analysis (bool): Whether to generate analysis plots
         gpu_available (bool): Whether GPU acceleration is available
         input_dir (str): Input directory path
+        codec (str): Codec to use ('h264' or 'h265'), None for profile default
+        prefer_hardware (bool): Whether to prefer hardware acceleration
     
     Returns:
         list: List of compression reports
@@ -82,7 +95,8 @@ def process_all_videos(profile='balanced', show_analysis=True, gpu_available=Fal
     for i, video_path in enumerate(videos, 1):
         print(f"\n[{i}/{len(videos)}] Processing: {os.path.basename(video_path)}")
         report = process_single_video(video_path, profile=profile, 
-                                    show_analysis=show_analysis, gpu_available=gpu_available)
+                                    show_analysis=show_analysis, gpu_available=gpu_available,
+                                    codec=codec, prefer_hardware=prefer_hardware)
         if report is not None:
             all_reports.append(report)
 

@@ -9,6 +9,7 @@ import ffmpeg
 from datetime import datetime
 from .config import COMPRESSION_PROFILES
 from .motion_detection import MotionDetector
+from .codec_optimizer import CodecOptimizer
 
 
 class AdaptiveVideoCompressor:
@@ -16,12 +17,18 @@ class AdaptiveVideoCompressor:
     Adaptive compression with GPU motion analysis and NVENC when available.
     """
     
-    def __init__(self, profile='balanced', gpu_available=False):
+    def __init__(self, profile='balanced', gpu_available=False, codec=None, prefer_hardware=True):
         if profile not in COMPRESSION_PROFILES:
             raise ValueError(f"Unknown profile '{profile}'. Available: {list(COMPRESSION_PROFILES.keys())}")
         
         self.profile = COMPRESSION_PROFILES[profile]
         self.gpu_available = gpu_available
+        self.codec_optimizer = CodecOptimizer()
+        self.prefer_hardware = prefer_hardware
+        
+        # Determine codec to use
+        self.codec = codec if codec else self.profile.get('preferred_codec', 'h264')
+        
         # Use Torch GPU capability for motion detection
         self.motion_detector = MotionDetector(use_gpu=gpu_available)
 
@@ -100,7 +107,7 @@ class AdaptiveVideoCompressor:
 
     def _execute_compression(self, input_path, output_path, segments, motion_analysis):
         """
-        Execute the video compression with calculated settings.
+        Execute the video compression with calculated settings using optimal codec.
         """
         total_duration = sum(max(0.0, seg['end_time'] - seg['start_time']) for seg in segments)
 
@@ -114,39 +121,32 @@ class AdaptiveVideoCompressor:
             inactive_time = total_duration - active_time
             target_fps = self.profile['active_fps'] if active_time > inactive_time else self.profile['inactive_fps']
 
-        print(f"Compression settings: CRF~{avg_crf:.1f}, FPS={target_fps}")
+        # Get optimal encoder for the selected codec
+        try:
+            encoder_info = self.codec_optimizer.get_optimal_encoder(
+                codec=self.codec, 
+                prefer_hardware=self.prefer_hardware
+            )
+            print(f"Using: {encoder_info['description']}")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return {'success': False, 'error': str(e), 'compression_time': 0}
+
+        # Optimize encoding settings
+        encode_options = self.codec_optimizer.optimize_encoding_settings(
+            encoder_info=encoder_info,
+            crf_value=int(avg_crf),
+            preset=self.profile.get('preset', 'medium')
+        )
+        
+        # Add frame rate
+        encode_options['r'] = target_fps
+        
+        print(f"Compression settings: {self.codec.upper()}, CRF~{avg_crf:.1f}, FPS={target_fps}")
+        print(f"Encoder: {encode_options['vcodec']}")
 
         input_stream = ffmpeg.input(input_path)
-
-        encode_options = {
-            'vcodec': 'libx264',
-            'crf': int(avg_crf),
-            'preset': 'medium',
-            'r': target_fps,
-            'movflags': '+faststart'
-        }
-
-        # Prefer NVENC if available
-        if self.gpu_available:
-            try:
-                enc_list = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'],
-                                          capture_output=True, text=True)
-                if enc_list.returncode == 0 and ('h264_nvenc' in enc_list.stdout):
-                    cq_val = max(0, min(51, int(avg_crf)))
-                    encode_options.update({
-                        'vcodec': 'h264_nvenc',
-                        'preset': 'p4',        # NVENC quality/speed
-                        'cq': cq_val,
-                        'rc': 'vbr',
-                        'r': target_fps
-                    })
-                    encode_options.pop('crf', None)
-                    print("GPU: Using NVIDIA GPU acceleration (NVENC)")
-                else:
-                    print("WARNING: NVENC not available, using CPU libx264")
-            except Exception as _:
-                print("WARNING: Could not detect GPU encoder, using CPU libx264")
-
+        
         start_time = time.time()
         try:
             (
@@ -160,14 +160,21 @@ class AdaptiveVideoCompressor:
                 'success': True,
                 'compression_time': compression_time,
                 'settings_used': encode_options,
+                'encoder_info': encoder_info,
                 'segments_processed': len(segments),
                 'avg_crf': avg_crf,
-                'target_fps': target_fps
+                'target_fps': target_fps,
+                'codec_used': self.codec
             }
         except ffmpeg.Error as e:
             err = e.stderr.decode() if e.stderr else str(e)
             print(f"ERROR: FFmpeg error: {err}")
-            return {'success': False, 'error': err, 'compression_time': time.time() - start_time}
+            return {
+                'success': False, 
+                'error': err, 
+                'compression_time': time.time() - start_time,
+                'settings_used': encode_options
+            }
 
     def _generate_compression_report(self, input_path, output_path, motion_analysis, compression_result):
         """
@@ -207,12 +214,27 @@ def print_compression_summary(report):
     print(f"Input File:    {report['input_file']}")
     print(f"Output File:   {report['output_file']}")
     print(f"Profile Used:  {report['profile_used']}")
+    
+    # Codec information
+    if 'codec_used' in cr:
+        print(f"Codec:         {cr['codec_used'].upper()}")
+    if 'encoder_info' in cr:
+        encoder_type = cr['encoder_info']['type']
+        encoder_name = cr['encoder_info']['config']['encoder']
+        print(f"Encoder:       {encoder_name} ({encoder_type})")
+    
     print(f"Input Size:    {fs['input_mb']:.2f} MB")
     print(f"Output Size:   {fs['output_mb']:.2f} MB")
     print(f"Reduced By:    {fs['compression_ratio']:.1f}%  ({fs['reduction_mb']:.2f} MB)")
     print(f"Duration:      {vs['duration']:.1f}s at {vs['fps']:.1f} FPS")
     print(f"Active Time:   {vs['active_percentage']:.1f}%")
     print(f"GPU Frames:    {vs['gpu_frames_processed']}, CPU Frames: {vs['cpu_frames_processed']}")
-    print(f"NVENC Used:    {('vcodec' in cr['settings_used'] and cr['settings_used']['vcodec']=='h264_nvenc')}")
+    
+    # Hardware acceleration status
+    hardware_used = False
+    if 'encoder_info' in cr and cr['encoder_info']['type'] != 'software':
+        hardware_used = True
+    print(f"HW Accel:      {'Yes' if hardware_used else 'No'}")
+    
     print(f"Elapsed (enc): {cr.get('compression_time', 0):.1f}s")
     print("====================================================\n")

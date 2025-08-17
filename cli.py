@@ -8,6 +8,7 @@ import sys
 import os
 from core.motion_detection import check_gpu_support
 from core.config import COMPRESSION_PROFILES
+from core.codec_optimizer import CodecOptimizer
 from main import process_single_video, process_all_videos
 from utils.video_utils import discover_videos, print_video_list, ensure_directories
 from utils.reporting import print_summary_stats
@@ -35,6 +36,10 @@ Examples:
     compress_parser.add_argument('video', help='Path to video file')
     compress_parser.add_argument('--profile', '-p', choices=list(COMPRESSION_PROFILES.keys()), 
                                 default='balanced', help='Compression profile (default: balanced)')
+    compress_parser.add_argument('--codec', '-c', choices=['h264', 'h265'], 
+                                help='Video codec (default: profile preference)')
+    compress_parser.add_argument('--no-hardware', action='store_true', 
+                                help='Disable hardware acceleration')
     compress_parser.add_argument('--no-analysis', action='store_true', 
                                 help='Skip motion analysis visualization')
     compress_parser.add_argument('--output', '-o', help='Output file path')
@@ -43,6 +48,10 @@ Examples:
     batch_parser = subparsers.add_parser('batch', help='Process all videos in directory')
     batch_parser.add_argument('--profile', '-p', choices=list(COMPRESSION_PROFILES.keys()), 
                              default='balanced', help='Compression profile (default: balanced)')
+    batch_parser.add_argument('--codec', '-c', choices=['h264', 'h265'], 
+                             help='Video codec (default: profile preference)')
+    batch_parser.add_argument('--no-hardware', action='store_true', 
+                             help='Disable hardware acceleration')
     batch_parser.add_argument('--input-dir', '-i', help='Input directory (default: input_videos)')
     batch_parser.add_argument('--no-analysis', action='store_true', 
                              help='Skip motion analysis visualizations')
@@ -56,6 +65,9 @@ Examples:
     
     # GPU check
     subparsers.add_parser('gpu-check', help='Check GPU acceleration support')
+    
+    # Codec status
+    subparsers.add_parser('codec-status', help='Check available video codecs and hardware acceleration')
     
     # Statistics
     subparsers.add_parser('stats', help='Show compression statistics')
@@ -73,6 +85,7 @@ def cmd_compress(args, gpu_available):
         return 1
     
     show_analysis = not args.no_analysis
+    prefer_hardware = not args.no_hardware
     
     # Handle custom output path
     if args.output:
@@ -86,7 +99,9 @@ def cmd_compress(args, gpu_available):
         args.video, 
         profile=args.profile, 
         show_analysis=show_analysis,
-        gpu_available=gpu_available
+        gpu_available=gpu_available,
+        codec=args.codec,
+        prefer_hardware=prefer_hardware
     )
     
     return 0 if report and report['compression_result']['success'] else 1
@@ -95,12 +110,15 @@ def cmd_compress(args, gpu_available):
 def cmd_batch(args, gpu_available):
     """Handle batch command."""
     show_analysis = not args.no_analysis
+    prefer_hardware = not args.no_hardware
     
     reports = process_all_videos(
         profile=args.profile,
         show_analysis=show_analysis,
         gpu_available=gpu_available,
-        input_dir=args.input_dir
+        input_dir=args.input_dir,
+        codec=args.codec,
+        prefer_hardware=prefer_hardware
     )
     
     success_count = len([r for r in reports if r and r['compression_result']['success']])
@@ -147,6 +165,13 @@ def cmd_gpu_check():
         print("WARNING:  No GPU acceleration available")
         print("   Motion detection will use CPU")
     
+    return 0
+
+
+def cmd_codec_status():
+    """Handle codec-status command."""
+    codec_optimizer = CodecOptimizer()
+    codec_optimizer.print_encoder_status()
     return 0
 
 
@@ -197,6 +222,8 @@ def main():
         return cmd_profiles()
     elif args.command == 'gpu-check':
         return cmd_gpu_check()
+    elif args.command == 'codec-status':
+        return cmd_codec_status()
     elif args.command == 'stats':
         return cmd_stats()
     elif args.command == 'setup':

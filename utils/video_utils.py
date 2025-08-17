@@ -54,7 +54,7 @@ def ensure_directories():
         print(f"Directory ready: {dir_path}")
 
 
-def get_output_path(input_path, profile, output_dir=None):
+def get_output_path(input_path, profile, output_dir=None, codec=None):
     """
     Generate output path for compressed video.
     
@@ -62,6 +62,7 @@ def get_output_path(input_path, profile, output_dir=None):
         input_path (str): Path to input video
         profile (str): Compression profile name
         output_dir (str): Output directory. Defaults to DEFAULT_PATHS['output_dir']
+        codec (str): Codec used ('h264' or 'h265'), None for default
     
     Returns:
         str: Output file path
@@ -70,7 +71,8 @@ def get_output_path(input_path, profile, output_dir=None):
         output_dir = DEFAULT_PATHS['output_dir']
     
     base_name = os.path.splitext(os.path.basename(input_path))[0]
-    output_filename = f"{base_name}_compressed_{profile}.mp4"
+    codec_suffix = f"_{codec}" if codec else ""
+    output_filename = f"{base_name}_compressed_{profile}{codec_suffix}.mp4"
     return os.path.join(output_dir, output_filename)
 
 
