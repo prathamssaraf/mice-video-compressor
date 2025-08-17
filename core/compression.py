@@ -169,6 +169,46 @@ class AdaptiveVideoCompressor:
         except ffmpeg.Error as e:
             err = e.stderr.decode() if e.stderr else str(e)
             print(f"ERROR: FFmpeg error: {err}")
+            
+            # If hardware encoding failed, try software fallback
+            if encoder_info['type'] != 'software' and ('libcuda' in err or 'nvenc' in err.lower()):
+                print("WARNING: Hardware encoding failed, falling back to software encoding...")
+                try:
+                    software_encoder = self.codec_optimizer.get_optimal_encoder(
+                        codec=self.codec, 
+                        prefer_hardware=False
+                    )
+                    software_options = self.codec_optimizer.optimize_encoding_settings(
+                        encoder_info=software_encoder,
+                        crf_value=int(avg_crf),
+                        preset=self.profile.get('preset', 'medium')
+                    )
+                    software_options['r'] = target_fps
+                    
+                    print(f"Retrying with: {software_encoder['description']}")
+                    print(f"Encoder: {software_options['vcodec']}")
+                    
+                    (
+                        input_stream
+                        .output(output_path, **software_options)
+                        .overwrite_output()
+                        .run(capture_stdout=True, capture_stderr=True, quiet=True)
+                    )
+                    compression_time = time.time() - start_time
+                    return {
+                        'success': True,
+                        'compression_time': compression_time,
+                        'settings_used': software_options,
+                        'encoder_info': software_encoder,
+                        'segments_processed': len(segments),
+                        'avg_crf': avg_crf,
+                        'target_fps': target_fps,
+                        'codec_used': self.codec,
+                        'fallback_used': True
+                    }
+                except Exception as fallback_error:
+                    print(f"ERROR: Software fallback also failed: {fallback_error}")
+            
             return {
                 'success': False, 
                 'error': err, 

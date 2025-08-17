@@ -34,7 +34,7 @@ class CodecOptimizer:
                 if 'libx264' in output:
                     available['h264']['software'] = True
                 if 'h264_nvenc' in output:
-                    available['h264']['nvidia'] = True
+                    available['h264']['nvidia'] = self._test_nvenc_availability()
                 if 'h264_qsv' in output:
                     available['h264']['intel'] = True
                 if 'h264_amf' in output:
@@ -44,7 +44,7 @@ class CodecOptimizer:
                 if 'libx265' in output:
                     available['h265']['software'] = True
                 if 'hevc_nvenc' in output:
-                    available['h265']['nvidia'] = True
+                    available['h265']['nvidia'] = self._test_nvenc_availability()
                 if 'hevc_qsv' in output:
                     available['h265']['intel'] = True
                 if 'hevc_amf' in output:
@@ -102,6 +102,21 @@ class CodecOptimizer:
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
             pass
         return (0, 0, 0)  # Default to very old version
+    
+    def _test_nvenc_availability(self):
+        """Test if NVENC is actually usable (not just compiled in FFmpeg)."""
+        try:
+            # Try a quick NVENC test with a dummy input
+            test_cmd = [
+                'ffmpeg', '-hide_banner', '-loglevel', 'error',
+                '-f', 'lavfi', '-i', 'testsrc=duration=1:size=320x240:rate=1',
+                '-c:v', 'h264_nvenc', '-frames:v', '1',
+                '-f', 'null', '-'
+            ]
+            result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=10)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+            return False
     
     def get_optimal_encoder(self, codec='h264', prefer_hardware=True):
         """
