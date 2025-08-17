@@ -15,6 +15,7 @@ class CodecOptimizer:
     def __init__(self):
         self.available_encoders = self._detect_available_encoders()
         self.gpu_vendor = self._detect_gpu_vendor()
+        self.ffmpeg_version = self._detect_ffmpeg_version()
     
     def _detect_available_encoders(self):
         """Detect which encoders are available in the current FFmpeg build."""
@@ -87,6 +88,21 @@ class CodecOptimizer:
         
         return 'software'
     
+    def _detect_ffmpeg_version(self):
+        """Detect FFmpeg version to determine preset compatibility."""
+        try:
+            result = subprocess.run(['ffmpeg', '-version'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Extract version from output like "ffmpeg version 4.2.4"
+                version_match = re.search(r'ffmpeg version (\d+)\.(\d+)\.(\d+)', result.stdout)
+                if version_match:
+                    major, minor, patch = map(int, version_match.groups())
+                    return (major, minor, patch)
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+            pass
+        return (0, 0, 0)  # Default to very old version
+    
     def get_optimal_encoder(self, codec='h264', prefer_hardware=True):
         """
         Get the optimal encoder for the specified codec.
@@ -157,9 +173,12 @@ class CodecOptimizer:
                 # NVENC CQ range is 0-51, same as CRF
                 settings[quality_param] = max(0, min(51, crf_value))
                 settings['rc'] = 'vbr'  # Variable bitrate
-                settings['rc-lookahead'] = 20  # Lookahead frames
-                settings['spatial_aq'] = 1  # Spatial adaptive quantization
-                settings['temporal_aq'] = 1  # Temporal adaptive quantization
+                
+                # Only add advanced options for newer FFmpeg versions
+                if self.ffmpeg_version >= (4, 4, 0):
+                    settings['rc-lookahead'] = 20  # Lookahead frames
+                    settings['spatial_aq'] = 1  # Spatial adaptive quantization
+                    settings['temporal_aq'] = 1  # Temporal adaptive quantization
             elif encoder_type in ['intel', 'amd']:
                 # QSV and AMF typically use similar ranges
                 settings[quality_param] = max(0, min(51, crf_value))
@@ -172,13 +191,23 @@ class CodecOptimizer:
             else:
                 # Find closest preset
                 if encoder_type == 'nvidia':
-                    # Map common presets to NVENC presets
-                    preset_map = {
-                        'ultrafast': 'p1', 'superfast': 'p1', 'veryfast': 'p2',
-                        'faster': 'p3', 'fast': 'p3', 'medium': 'p4',
-                        'slow': 'p5', 'slower': 'p6', 'veryslow': 'p7'
-                    }
-                    settings['preset'] = preset_map.get(preset, 'p4')
+                    # Check FFmpeg version for preset compatibility
+                    if self.ffmpeg_version >= (4, 4, 0):
+                        # Newer FFmpeg with p1-p7 presets
+                        preset_map = {
+                            'ultrafast': 'p1', 'superfast': 'p1', 'veryfast': 'p2',
+                            'faster': 'p3', 'fast': 'p3', 'medium': 'p4',
+                            'slow': 'p5', 'slower': 'p6', 'veryslow': 'p7'
+                        }
+                        settings['preset'] = preset_map.get(preset, 'p4')
+                    else:
+                        # Older FFmpeg with traditional presets
+                        preset_map = {
+                            'ultrafast': 'fast', 'superfast': 'fast', 'veryfast': 'fast',
+                            'faster': 'medium', 'fast': 'medium', 'medium': 'medium',
+                            'slow': 'slow', 'slower': 'slow', 'veryslow': 'slow'
+                        }
+                        settings['preset'] = preset_map.get(preset, 'medium')
                 elif encoder_type == 'amd':
                     # Map to AMF presets
                     preset_map = {
